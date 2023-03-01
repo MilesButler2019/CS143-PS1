@@ -6,7 +6,6 @@ from pox.lib.addresses import EthAddr
 from collections import namedtuple
 import os
 import csv
-
 """ Add your imports here ... """
 
 
@@ -18,30 +17,32 @@ class Firewall(EventMixin):
     def __init__(self):
         self.listenTo(core.openflow)
         log.debug("Enabling Firewall Module")
-
-    def _handle_ConnectionUp(self, event):
-        """Implement your logic here"""
-        self.connection = event.connection
-        print("Connection %s" % (dpid_to_str(event.dpid),))
-
+        core.openflow.addListenerByName("ConnectionUp", self._handle_ConnectionUp)
         with open(policyFile, 'r') as f:
             reader = csv.reader(f)
-            policies = list(reader)
+            next(reader)
+            self.policies = list(reader)
 
-        for policy in policies:
-            src_mac, dst_mac = policy
-            match = of.ofp_match()
-            match.dl_src = src_mac
-            match.dl_dst = dst_mac
+        self.policies_set = set()
 
-            msg = of.ofp_flow_mod()
-            msg.match = match
-            msg.priority = 1
-            msg.actions.append(of.ofp_action_output(port = of.OFPP_NONE))
+        for i in self.policies:
+            self.policies_set.update([((EthAddr(i[1]), EthAddr(i[2])))])
 
-        self.connection.send(msg)
-        log.debug("Firewall rules installed on %s", dpidToStr(event.dpid))
 
+    def _handle_ConnectionUp(self, event):
+        dpid = dpidToStr(event.dpid)
+        #Allow all traffic 
+        switch = event.connection
+        match = of.ofp_match()
+        action = of.ofp_action_output(port=of.OFPP_CONTROLLER)
+        flow_mod = of.ofp_flow_mod(match=match, actions=[action])
+        switch.send(flow_mod)
+        
+        # Set up flow rules to block pairs of MAC addresses
+        for  mac in self.policies_set:
+             match = of.ofp_match(dl_src=mac[0], dl_dst=mac[1])
+             flow_mod = of.ofp_flow_mod(match=match)
+             switch.send(flow_mod)
 
 def launch():
     # start Firewall module
